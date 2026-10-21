@@ -84,6 +84,7 @@ add_result() {
     ok)   printf '   %s[ОК]     %s: %s%s\n' "$C_G" "$3" "$4" "$C_0" ;;
     warn) printf '   %s[УВАГА]  %s: %s%s\n' "$C_Y" "$3" "$4" "$C_0" ;;
     fail) printf '   %s[КРИТ]   %s: %s%s\n' "$C_R" "$3" "$4" "$C_0" ;;
+    info) printf '   %s[ІНФО]   %s: %s%s\n' "$C_C" "$3" "$4" "$C_0" ;;
     *)    printf '   %s[НЕ ПЕР] %s: %s%s\n' "$C_D" "$3" "$4" "$C_0" ;;
   esac
 }
@@ -212,52 +213,93 @@ pkg_snapshot() {
     pacman) pacman -Qq 2>/dev/null ;;
   esac | LC_ALL=C sort -u
 }
+# Захист від зависань при встановленні: жодних питань у терміналі,
+# очікування, якщо менеджер пакетів зайнятий фоновим оновленням.
+pm_env() {
+  export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a NEEDRESTART_SUSPEND=1 APT_LISTCHANGES_FRONTEND=none
+}
+pm_run() {  # $1 = ліміт секунд, далі команда; stdin закрито, щоб нічого не чекало відповіді
+  local limit=$1; shift
+  if has timeout && timeout --foreground 1 true 2>/dev/null; then
+    timeout --foreground "$limit" "$@" </dev/null
+  elif has timeout; then
+    timeout "$limit" "$@" </dev/null
+  else
+    "$@" </dev/null
+  fi
+}
+apt_busy() { pgrep -x 'apt|apt-get|dpkg|unattended-upgr|packagekitd' >/dev/null 2>&1; }
+APT_OPTS="-o DPkg::Lock::Timeout=300 -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold"
+
 linux_prepare_tools() {
-  local need="" pair p T=""
+  local need="" pair p ok="" bad="" waited=0
   for p in apt-get dnf yum zypper pacman; do has "$p" && { PM=$p; break; }; done
   for pair in smartctl:smartmontools dmidecode:dmidecode lspci:pciutils lsusb:usbutils; do
     has "${pair%%:*}" || need="$need ${pair#*:}"
   done
   need=$(trim "$need")
-  if [ -z "$need" ]; then echo "   Усі потрібні утиліти вже встановлені — нічого ставити не треба."; return; fi
-  if [ -z "$PM" ]; then echo "   ${C_Y}Не знайдено менеджер пакетів — частина перевірок буде пропущена.${C_0}"; return; fi
-  echo "   Встановлюю тимчасово (буде видалено в кінці): $need"
-  has timeout && T="timeout 600"
+  if [ -z "$need" ]; then echo "   Усі потрібні утиліти вже встановлені — нічого ставити не треба."; return 0; fi
+  if [ -z "$PM" ]; then echo "   ${C_Y}Не знайдено менеджер пакетів — частина перевірок буде пропущена.${C_0}"; return 0; fi
+  echo "   Потрібно тимчасово встановити: $need"
+  echo "   ${C_D}(після тестів вони будуть видалені автоматично)${C_0}"
+  pm_env
   pkg_snapshot > "$WORK/pk_before"
-  [ "$PM" = apt-get ] && { export DEBIAN_FRONTEND=noninteractive; $T apt-get -o DPkg::Lock::Timeout=60 update -qq >"$WORK/pm.log" 2>&1; }
-  # по одному пакету: якщо якогось немає в цьому дистрибутиві, решта все одно поставиться
+  : > "$WORK/pm.log"
+
+  if [ "$PM" = apt-get ]; then
+    while apt_busy && [ "$waited" -lt 300 ]; do
+      [ "$waited" = 0 ] && echo "   ${C_Y}Менеджер пакетів зайнятий (фонове оновлення системи) — чекаю до 5 хв…${C_0}"
+      sleep 5; waited=$((waited + 5))
+    done
+    printf '   Оновлюю список пакетів… '
+    if pm_run 300 apt-get $APT_OPTS update -qq >>"$WORK/pm.log" 2>&1; then echo "${C_G}ок${C_0}"; else echo "${C_Y}з помилками (пробую далі)${C_0}"; fi
+  fi
+
+  # По одному пакету: якщо якогось немає, решта все одно поставиться.
   for p in $need; do
+    printf '   Встановлюю %s… ' "$p"
     case $PM in
-      apt-get) $T apt-get -o DPkg::Lock::Timeout=60 install -y -qq --no-install-recommends "$p" >>"$WORK/pm.log" 2>&1 ;;
-      dnf)     $T dnf install -y -q "$p" >>"$WORK/pm.log" 2>&1 ;;
-      yum)     $T yum install -y -q "$p" >>"$WORK/pm.log" 2>&1 ;;
-      zypper)  $T zypper --non-interactive --quiet install --no-recommends "$p" >>"$WORK/pm.log" 2>&1 ;;
-      pacman)  $T pacman -S --noconfirm --needed "$p" >>"$WORK/pm.log" 2>&1 ;;
+      apt-get) pm_run 600 apt-get $APT_OPTS install -y -q --no-install-recommends "$p" >>"$WORK/pm.log" 2>&1 ;;
+      dnf)     pm_run 600 dnf install -y -q --setopt=install_weak_deps=False "$p" >>"$WORK/pm.log" 2>&1 ;;
+      yum)     pm_run 600 yum install -y -q "$p" >>"$WORK/pm.log" 2>&1 ;;
+      zypper)  pm_run 600 zypper --non-interactive --quiet install --no-recommends "$p" >>"$WORK/pm.log" 2>&1 ;;
+      pacman)  pm_run 600 pacman -S --noconfirm --needed "$p" >>"$WORK/pm.log" 2>&1 ;;
     esac
+    if [ $? -eq 0 ]; then echo "${C_G}ок${C_0}"; ok="$ok $p"; else echo "${C_Y}не вдалося${C_0}"; bad="$bad $p"; fi
   done
+
   pkg_snapshot > "$WORK/pk_after"
   INSTALLED=$(LC_ALL=C comm -13 "$WORK/pk_before" "$WORK/pk_after" | tr '\n' ' ')
   INSTALLED=$(trim "$INSTALLED")
-  if [ -n "$INSTALLED" ]; then echo "   ${C_G}Встановлено тимчасово: $INSTALLED${C_0}"
-  else echo "   ${C_Y}Не вдалося встановити (немає інтернету?) — частина перевірок буде пропущена.${C_0}"; fi
+  [ -n "$INSTALLED" ] && echo "   ${C_G}Встановлено тимчасово (з залежностями): $INSTALLED${C_0}"
+  if [ -n "$(trim "$bad")" ]; then
+    echo "   ${C_Y}Не вдалося встановити:$bad — ці перевірки будуть позначені «не вдалося перевірити».${C_0}"
+    echo "   ${C_D}Причина (останні рядки журналу менеджера пакетів):${C_0}"
+    grep -Ei 'error|помилк|unable|could not|failed|E:' "$WORK/pm.log" | tail -n 4 | sed 's/^/     /'
+    if grep -q 'dpkg --configure -a' "$WORK/pm.log"; then
+      echo "   ${C_Y}Підказка: система має незавершене оновлення. Виконайте «sudo dpkg --configure -a» і запустіть тест ще раз.${C_0}"
+    fi
+  fi
+  return 0
 }
 linux_remove_tools() {
   [ -n "$INSTALLED" ] || return 0
   local list=$INSTALLED left
   INSTALLED=""
   echo "   Видаляю тимчасово встановлені утиліти: $list"
+  pm_env
   case $PM in
-    apt-get) apt-get -o DPkg::Lock::Timeout=60 purge -y -qq $list >"$WORK/pm_rm.log" 2>&1 ;;
-    dnf)     dnf remove -y -q --noautoremove $list >"$WORK/pm_rm.log" 2>&1 || dnf remove -y -q $list >>"$WORK/pm_rm.log" 2>&1 ;;
-    yum)     yum remove -y -q $list >"$WORK/pm_rm.log" 2>&1 ;;
-    zypper)  zypper --non-interactive --quiet remove $list >"$WORK/pm_rm.log" 2>&1 ;;
-    pacman)  pacman -Rn --noconfirm $list >"$WORK/pm_rm.log" 2>&1 ;;
+    apt-get) pm_run 600 apt-get $APT_OPTS purge -y -q $list >"$WORK/pm_rm.log" 2>&1 ;;
+    dnf)     pm_run 600 dnf remove -y -q --noautoremove $list >"$WORK/pm_rm.log" 2>&1 || pm_run 600 dnf remove -y -q $list >>"$WORK/pm_rm.log" 2>&1 ;;
+    yum)     pm_run 600 yum remove -y -q $list >"$WORK/pm_rm.log" 2>&1 ;;
+    zypper)  pm_run 600 zypper --non-interactive --quiet remove $list >"$WORK/pm_rm.log" 2>&1 ;;
+    pacman)  pm_run 600 pacman -Rn --noconfirm $list >"$WORK/pm_rm.log" 2>&1 ;;
   esac
   printf '%s\n' $list | LC_ALL=C sort -u > "$WORK/pk_ours"
   left=$(pkg_snapshot | LC_ALL=C comm -12 "$WORK/pk_ours" - | tr '\n' ' ')
   left=$(trim "$left")
   if [ -z "$left" ]; then echo "   ${C_G}Видалено. Система в тому стані, що й до тесту.${C_0}"
-  else echo "   ${C_Y}Не вдалося видалити: $left — видаліть вручну.${C_0}"; fi
+  else echo "   ${C_Y}Не вдалося видалити: $left — видаліть їх вручну через менеджер пакетів.${C_0}"; fi
 }
 
 # ===================================================================== тести Linux
@@ -582,15 +624,87 @@ t_logs_linux() {
 sp_get() {  # stdin = вивід system_profiler, $1 = назва поля
   awk -v k="$1" '{ line=$0; sub(/^[ \t]+/, "", line); i=index(line, ": "); if (i > 0 && substr(line, 1, i-1) == k) { print substr(line, i+2); exit } }'
 }
+# ---------------------------------------------------------------- обліковий запис (найважливіше, вгорі звіту)
+ACC="Обліковий запис"
+PLISTBUDDY=${PLISTBUDDY:-/usr/libexec/PlistBuddy}
+mask_email() {  # j***@icloud.com — достатньо, щоб упізнати, без повної адреси
+  local e=$1 u d
+  case $e in
+    *@*) u=${e%%@*}; d=${e#*@}; printf '%s***@%s' "$(printf '%s' "$u" | cut -c1-2)" "$d" ;;
+    *)   printf '%s***' "$(printf '%s' "$e" | cut -c1-2)" ;;
+  esac
+}
+t_account_mac() {
+  local users u home role plist id logged n=0 signed=0 act fv mdm dep enr
+  # Усі звичайні облікові записи на цьому Mac (і адміни, і стандартні).
+  users=$(dscl . -list /Users UniqueID 2>/dev/null | awk '$2 >= 501 && $1 !~ /^_/ {print $1}')
+  for u in $users; do
+    home=$(dscl . -read "/Users/$u" NFSHomeDirectory 2>/dev/null | awk '{print $2}')
+    [ -n "$home" ] && [ -d "$home" ] || continue
+    n=$((n+1))
+    if dseditgroup -o checkmember -m "$u" admin >/dev/null 2>&1; then role="адмін"; else role="стандартний"; fi
+    plist="$home/Library/Preferences/MobileMeAccounts.plist"
+    if [ ! -e "$plist" ]; then
+      res ok "$ACC" "iCloud — $u ($role)" "не увійдено"
+      continue
+    fi
+    if ! "$PLISTBUDDY" -c 'Print' "$plist" >/dev/null 2>&1; then
+      res skip "$ACC" "iCloud — $u ($role)" "не вдалося прочитати налаштування iCloud цього користувача"
+      continue
+    fi
+    id=$("$PLISTBUDDY" -c 'Print :Accounts:0:AccountID' "$plist" 2>/dev/null)
+    logged=$("$PLISTBUDDY" -c 'Print :Accounts:0:LoggedIn' "$plist" 2>/dev/null)
+    if [ -n "$id" ] && [ "$logged" != false ]; then
+      signed=$((signed+1))
+      res fail "$ACC" "iCloud — $u ($role)" "УВІЙДЕНО: $(mask_email "$id") — перед передачею Mac вийдіть з iCloud у цьому обліковому записі"
+    else
+      res ok "$ACC" "iCloud — $u ($role)" "не увійдено"
+    fi
+  done
+  [ "$n" = 0 ] && res skip "$ACC" "iCloud" "не знайдено облікових записів користувачів"
+
+  # «Знайти Mac» тримає токен у NVRAM, поки функція увімкнена.
+  if nvram fmm-mobileme-token-FMM >/dev/null 2>&1; then
+    res fail "$ACC" "Знайти Mac" "УВІМКНЕНО — Mac прив'язаний до Apple ID; вимкніть у налаштуваннях iCloud"
+  else
+    res ok "$ACC" "Знайти Mac" "вимкнено"
+  fi
+
+  act=$(system_profiler SPHardwareDataType 2>/dev/null | sp_get "Activation Lock Status")
+  case $act in
+    Enabled*)  res fail "$ACC" "Блокування активації" "УВІМКНЕНО — без пароля Apple ID цей Mac не можна буде налаштувати заново" ;;
+    Disabled*) res ok "$ACC" "Блокування активації" "вимкнено" ;;
+    *)         res info "$ACC" "Блокування активації" "цей Mac не підтримує блокування активації (немає чипа T2 / Apple)" ;;
+  esac
+
+  fv=$(fdesetup status 2>/dev/null | head -n 1)
+  case $fv in
+    *"is On"*)  res info "$ACC" "FileVault" "увімкнено — диск зашифровано" ;;
+    *"is Off"*) res info "$ACC" "FileVault" "вимкнено — диск не зашифровано" ;;
+    "")         res skip "$ACC" "FileVault" "не вдалося перевірити" ;;
+    *)          res info "$ACC" "FileVault" "$fv" ;;
+  esac
+
+  enr=$(profiles status -type enrollment 2>/dev/null)
+  dep=$(printf '%s\n' "$enr" | awk -F': ' '/Enrolled via DEP/ {print $2; exit}')
+  mdm=$(printf '%s\n' "$enr" | awk -F': ' '/MDM enrollment/ {print $2; exit}')
+  if [ -z "$enr" ]; then res skip "$ACC" "Керування організацією (MDM)" "не вдалося перевірити"
+  else
+    case "$dep$mdm" in
+      *Yes*) res info "$ACC" "Керування організацією (MDM)" "КЕРУЄТЬСЯ: MDM — ${mdm:-?}, через Apple Business Manager (DEP) — ${dep:-?}" ;;
+      *)     res info "$ACC" "Керування організацією (MDM)" "не керується (MDM: ${mdm:-No}, DEP: ${dep:-No})" ;;
+    esac
+  fi
+}
+
 t_system_mac() {
-  local hw host model ident serial chip fw os act sip fv mdm
+  local hw host model ident serial fw os sip
   hw=$(system_profiler SPHardwareDataType 2>/dev/null)
   host=$(scutil --get ComputerName 2>/dev/null || hostname)
   model=$(printf '%s\n' "$hw" | sp_get "Model Name"); ident=$(printf '%s\n' "$hw" | sp_get "Model Identifier")
   serial=$(printf '%s\n' "$hw" | sp_get "Serial Number (system)")
   bad_serial "$serial" && serial=""
   fw=$(printf '%s\n' "$hw" | sp_get "System Firmware Version")
-  act=$(printf '%s\n' "$hw" | sp_get "Activation Lock Status")
   os="macOS $(sw_vers -productVersion 2>/dev/null) ($(sw_vers -buildVersion 2>/dev/null))"
   meta hostname "$host"; meta model "$model${ident:+ ($ident)}"; meta serial "$serial"; meta os "$os"
   spec "Назва ПК" "$host"; spec "Модель" "$model${ident:+ ($ident)}"
@@ -598,17 +712,11 @@ t_system_mac() {
   [ -n "$fw" ] && spec "Прошивка" "$fw"
   spec "Операційна система" "$os, $(uname -m)"
   if [ -n "$serial" ]; then res ok "Система" "Серійний номер" "$serial"; else res warn "Система" "Серійний номер" "не вдалося прочитати"; fi
-  case $act in
-    Enabled*)  res warn "Система" "Блокування активації" "увімкнено — Mac прив'язаний до Apple ID; перед передачею іншій людині його треба вимкнути" ;;
-    Disabled*) res ok "Система" "Блокування активації" "вимкнено" ;;
-  esac
   sip=$(csrutil status 2>/dev/null)
   case $sip in
     *enabled*)  res ok "Система" "Захист цілісності системи (SIP)" "увімкнено" ;;
     *disabled*) res warn "Система" "Захист цілісності системи (SIP)" "вимкнено" ;;
   esac
-  fv=$(fdesetup status 2>/dev/null | head -n 1); [ -n "$fv" ] && spec "FileVault" "$fv"
-  mdm=$(profiles status -type enrollment 2>/dev/null | tr '\n' ' '); [ -n "$mdm" ] && spec "Керування (MDM)" "$mdm"
 }
 
 t_hw_mac() {
@@ -663,7 +771,7 @@ t_disks_mac() {
 }
 
 t_battery_mac() {
-  local pw io cyc cond maxc design raw maxcap h st model
+  local pw io cyc cond maxc design raw nominal maxcap h st model src detail
   pw=$(system_profiler SPPowerDataType 2>/dev/null)
   io=$(ioreg -rn AppleSmartBattery 2>/dev/null)
   model=$(system_profiler SPHardwareDataType 2>/dev/null | sp_get "Model Name")
@@ -676,17 +784,26 @@ t_battery_mac() {
   fi
   cyc=$(printf '%s\n' "$pw" | sp_get "Cycle Count")
   cond=$(printf '%s\n' "$pw" | sp_get "Condition")
-  maxc=$(printf '%s\n' "$pw" | sp_get "Maximum Capacity" | tr -d '%')
-  design=$(printf '%s\n' "$io" | awk -F'= ' '/^ *"DesignCapacity" = / {print $2; exit}')
-  raw=$(printf '%s\n' "$io" | awk -F'= ' '/^ *"AppleRawMaxCapacity" = / {print $2; exit}')
-  maxcap=$(printf '%s\n' "$io" | awk -F'= ' '/^ *"MaxCapacity" = / {print $2; exit}')
-  h=""
-  if [ -n "$raw" ] && [ -n "$design" ] && [ "$design" -gt 0 ] 2>/dev/null; then h=$((raw * 100 / design))
-  elif [ -n "$maxcap" ] && [ "$maxcap" -gt 100 ] 2>/dev/null && [ -n "$design" ] && [ "$design" -gt 0 ] 2>/dev/null; then h=$((maxcap * 100 / design))
-  elif [ -n "$maxc" ]; then h=$(num "$maxc"); fi
+  maxc=$(num "$(printf '%s\n' "$pw" | sp_get "Maximum Capacity")")
+  design=$(printf '%s\n' "$io" | awk -F'= ' '/^ *"DesignCapacity" = / {print $2+0; exit}')
+  raw=$(printf '%s\n' "$io" | awk -F'= ' '/^ *"AppleRawMaxCapacity" = / {print $2+0; exit}')
+  nominal=$(printf '%s\n' "$io" | awk -F'= ' '/^ *"NominalChargeCapacity" = / {print $2+0; exit}')
+  maxcap=$(printf '%s\n' "$io" | awk -F'= ' '/^ *"MaxCapacity" = / {print $2+0; exit}')
+  h=""; src=""
+  # 1) те саме число, що macOS показує в Налаштуваннях → Батарея → «Максимальна ємність»
+  if [ -n "$maxc" ]; then h=$maxc; src="як у Налаштуваннях macOS"
+  # 2) старіші macOS: номінальна ємність / заводська (так рахує сама macOS)
+  elif [ -n "$nominal" ] && [ "${design:-0}" -gt 0 ]; then h=$((nominal * 100 / design)); src="розрахунок macOS"
+  elif [ -n "$raw" ] && [ "${design:-0}" -gt 0 ]; then h=$((raw * 100 / design)); src="за даними контролера батареї"
+  elif [ "${maxcap:-0}" -gt 100 ] && [ "${design:-0}" -gt 0 ]; then h=$((maxcap * 100 / design)); src="за даними контролера батареї"; fi
   if [ -n "$h" ]; then
     if [ "$h" -lt 50 ]; then st=fail; elif [ "$h" -lt 75 ]; then st=warn; else st=ok; fi
-    res "$st" "Батарея" "Стан батареї" "$h% від заводської ємності${design:+ (заводська $design мА·год)}"
+    detail="$src"
+    [ "${design:-0}" -gt 0 ] && detail="$detail; заводська ємність $design мА·год"
+    if [ -n "$raw" ] && [ "${design:-0}" -gt 0 ] && [ "$src" = "як у Налаштуваннях macOS" ]; then
+      detail="$detail; сирі дані контролера: $raw мА·год ($((raw * 100 / design))%)"
+    fi
+    res "$st" "Батарея" "Стан батареї" "$h% від заводської ємності ($detail)"
   else res skip "Батарея" "Стан батареї" "не вдалося визначити ємність"; fi
   case $cond in
     Normal*|"") ;;
@@ -966,6 +1083,19 @@ body{background:var(--bg);color:var(--fg);font:15px/1.5 "Segoe UI",-apple-system
 .specs td:first-child{width:32%;color:var(--mut)}
 @media(max-width:680px){.item{grid-template-columns:1fr}.specs td:first-child{width:40%}}
 footer{color:var(--mut);font-size:12px;margin-top:22px;text-align:center}
+.account{margin-top:18px;background:var(--card);border:1px solid var(--line);border-left:8px solid var(--ok);border-radius:16px;overflow:hidden}
+.account.fail{border-left-color:var(--fail)}.account.warn{border-left-color:var(--warn)}
+.account>h2{margin:0;padding:14px 18px;font-size:17px;display:flex;align-items:center;gap:10px}
+.account.fail>h2{background:var(--fail-bg);color:var(--fail)}.account.ok>h2{background:var(--ok-bg);color:var(--ok)}.account.warn>h2{background:var(--warn-bg);color:var(--warn)}
+.account>h2 small{margin-left:auto;font-size:13px;font-weight:600}
+.arow{display:grid;grid-template-columns:110px 240px 1fr;gap:4px 14px;padding:11px 18px;border-top:1px solid var(--line);align-items:center}
+.arow .tt{font-weight:600}
+.arow .v{word-break:break-word}
+.arow.fail .v{color:var(--fail);font-weight:700}
+.tag{display:inline-block;font-size:11px;font-weight:700;padding:3px 8px;border-radius:6px;color:#fff;background:var(--skip);text-align:center}
+.tag.ok{background:var(--ok)}.tag.warn{background:var(--warn)}.tag.fail{background:var(--fail)}.tag.info{background:#2f6fed}
+@media(max-width:680px){.arow{grid-template-columns:1fr}}
+
 
 .savebar{position:fixed;left:0;right:0;bottom:0;background:var(--dk);color:var(--dkt);padding:12px 16px;display:flex;align-items:center;gap:14px;justify-content:center;flex-wrap:wrap;box-shadow:0 -6px 24px rgba(0,0,0,.18);z-index:20}
 .savebar .fn{font-size:13px;color:var(--dkm);word-break:break-all}
@@ -1041,6 +1171,9 @@ cat > "$WORK/tpl_tail" <<'BIBIBI_TAIL_EOF'
   var IS_MAC = DATA.meta.platform ? DATA.meta.platform === 'macos' : /Mac/i.test(navigator.platform);
 
   var ORDER = ['fail', 'warn', 'ok', 'skip'];
+  // Results of this category are shown in a separate block at the very top.
+  var TOP_CAT = 'Обліковий запис';
+  var TAG = { ok: 'Норма', warn: 'Увага', fail: 'Критично', skip: 'Не перевірено', info: 'Інфо' };
   var TITLES = { fail: 'Критично', warn: 'Зауваження', ok: 'Норма', skip: 'Не вдалося перевірити' };
   var SHORT = { fail: 'Критично', warn: 'Зауваження', ok: 'Норма', skip: 'Не перевірено' };
   var MSTATE = { ok: 'Працює', fail: 'Проблема', skip: 'Пропущено', warn: 'Зауваження' };
@@ -1089,6 +1222,7 @@ cat > "$WORK/tpl_tail" <<'BIBIBI_TAIL_EOF'
     h += '</div></div><div class="verdict"><span class="pill">' + esc(s.verdict) + '</span><div class="counts">';
     ORDER.forEach(function (st) { h += '<span class="cnt ' + st + '">' + SHORT[st] + ': ' + s[st] + '</span>'; });
     h += '</div><div class="stamp">' + (FINAL ? 'Фінальний звіт' : 'Проміжний звіт: пройдіть ручні тести і натисніть «Зберегти звіт»') + '</div></div></section>';
+    h += accountBlock();
     if (!FINAL) h += manualPanel();
     ORDER.forEach(function (st) { h += block(st); });
     h += specsBlock();
@@ -1101,8 +1235,21 @@ cat > "$WORK/tpl_tail" <<'BIBIBI_TAIL_EOF'
     bindApp();
   }
   function fact(k, v) { return v ? '<span>' + esc(k) + ': <b>' + esc(v) + '</b></span>' : ''; }
+  function accountBlock() {
+    var items = DATA.results.filter(function (i) { return i.cat === TOP_CAT; });
+    if (!items.length) return '';
+    var worst = items.some(function (i) { return i.status === 'fail'; }) ? 'fail'
+      : items.some(function (i) { return i.status === 'warn'; }) ? 'warn' : 'ok';
+    var head = { fail: 'Пристрій прив\'язаний до облікового запису', warn: 'Обліковий запис: є зауваження', ok: 'Обліковий запис: пристрій вільний' }[worst];
+    var h = '<section class="account ' + worst + '"><h2>' + esc(head) + '<small>iCloud · Знайти · блокування · шифрування · MDM</small></h2>';
+    items.forEach(function (i) {
+      h += '<div class="arow ' + esc(i.status) + '"><div><span class="tag ' + esc(i.status) + '">' + esc(TAG[i.status] || i.status) +
+        '</span></div><div class="tt">' + esc(i.test) + '</div><div class="v">' + esc(i.value) + '</div></div>';
+    });
+    return h + '</section>';
+  }
   function block(st) {
-    var items = allItems().filter(function (i) { return i.status === st; });
+    var items = allItems().filter(function (i) { return i.status === st && i.cat !== TOP_CAT; });
     var h = '<details class="block ' + st + '"' + (st === 'ok' && items.length > 12 ? '' : ' open') + '><summary><span class="dot"></span>' +
       TITLES[st] + '<span class="n">' + items.length + '</span></summary>';
     if (!items.length) h += '<div class="empty">Немає</div>';
@@ -1595,6 +1742,7 @@ main() {
     run_test "Драйвери" 60 t_drivers_linux
     run_test "Журнал ядра" 60 t_logs_linux
   else
+    run_test "Обліковий запис: iCloud, Знайти Mac, блокування" 120 t_account_mac
     run_test "Система" 120 t_system_mac
     run_test "Процесор, пам'ять, відео" 120 t_hw_mac
     run_test "Накопичувачі" 120 t_disks_mac

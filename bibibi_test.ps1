@@ -94,6 +94,19 @@ body{background:var(--bg);color:var(--fg);font:15px/1.5 "Segoe UI",-apple-system
 .specs td:first-child{width:32%;color:var(--mut)}
 @media(max-width:680px){.item{grid-template-columns:1fr}.specs td:first-child{width:40%}}
 footer{color:var(--mut);font-size:12px;margin-top:22px;text-align:center}
+.account{margin-top:18px;background:var(--card);border:1px solid var(--line);border-left:8px solid var(--ok);border-radius:16px;overflow:hidden}
+.account.fail{border-left-color:var(--fail)}.account.warn{border-left-color:var(--warn)}
+.account>h2{margin:0;padding:14px 18px;font-size:17px;display:flex;align-items:center;gap:10px}
+.account.fail>h2{background:var(--fail-bg);color:var(--fail)}.account.ok>h2{background:var(--ok-bg);color:var(--ok)}.account.warn>h2{background:var(--warn-bg);color:var(--warn)}
+.account>h2 small{margin-left:auto;font-size:13px;font-weight:600}
+.arow{display:grid;grid-template-columns:110px 240px 1fr;gap:4px 14px;padding:11px 18px;border-top:1px solid var(--line);align-items:center}
+.arow .tt{font-weight:600}
+.arow .v{word-break:break-word}
+.arow.fail .v{color:var(--fail);font-weight:700}
+.tag{display:inline-block;font-size:11px;font-weight:700;padding:3px 8px;border-radius:6px;color:#fff;background:var(--skip);text-align:center}
+.tag.ok{background:var(--ok)}.tag.warn{background:var(--warn)}.tag.fail{background:var(--fail)}.tag.info{background:#2f6fed}
+@media(max-width:680px){.arow{grid-template-columns:1fr}}
+
 
 .savebar{position:fixed;left:0;right:0;bottom:0;background:var(--dk);color:var(--dkt);padding:12px 16px;display:flex;align-items:center;gap:14px;justify-content:center;flex-wrap:wrap;box-shadow:0 -6px 24px rgba(0,0,0,.18);z-index:20}
 .savebar .fn{font-size:13px;color:var(--dkm);word-break:break-all}
@@ -166,6 +179,9 @@ footer{color:var(--mut);font-size:12px;margin-top:22px;text-align:center}
   var IS_MAC = DATA.meta.platform ? DATA.meta.platform === 'macos' : /Mac/i.test(navigator.platform);
 
   var ORDER = ['fail', 'warn', 'ok', 'skip'];
+  // Results of this category are shown in a separate block at the very top.
+  var TOP_CAT = 'Обліковий запис';
+  var TAG = { ok: 'Норма', warn: 'Увага', fail: 'Критично', skip: 'Не перевірено', info: 'Інфо' };
   var TITLES = { fail: 'Критично', warn: 'Зауваження', ok: 'Норма', skip: 'Не вдалося перевірити' };
   var SHORT = { fail: 'Критично', warn: 'Зауваження', ok: 'Норма', skip: 'Не перевірено' };
   var MSTATE = { ok: 'Працює', fail: 'Проблема', skip: 'Пропущено', warn: 'Зауваження' };
@@ -214,6 +230,7 @@ footer{color:var(--mut);font-size:12px;margin-top:22px;text-align:center}
     h += '</div></div><div class="verdict"><span class="pill">' + esc(s.verdict) + '</span><div class="counts">';
     ORDER.forEach(function (st) { h += '<span class="cnt ' + st + '">' + SHORT[st] + ': ' + s[st] + '</span>'; });
     h += '</div><div class="stamp">' + (FINAL ? 'Фінальний звіт' : 'Проміжний звіт: пройдіть ручні тести і натисніть «Зберегти звіт»') + '</div></div></section>';
+    h += accountBlock();
     if (!FINAL) h += manualPanel();
     ORDER.forEach(function (st) { h += block(st); });
     h += specsBlock();
@@ -226,8 +243,21 @@ footer{color:var(--mut);font-size:12px;margin-top:22px;text-align:center}
     bindApp();
   }
   function fact(k, v) { return v ? '<span>' + esc(k) + ': <b>' + esc(v) + '</b></span>' : ''; }
+  function accountBlock() {
+    var items = DATA.results.filter(function (i) { return i.cat === TOP_CAT; });
+    if (!items.length) return '';
+    var worst = items.some(function (i) { return i.status === 'fail'; }) ? 'fail'
+      : items.some(function (i) { return i.status === 'warn'; }) ? 'warn' : 'ok';
+    var head = { fail: 'Пристрій прив\'язаний до облікового запису', warn: 'Обліковий запис: є зауваження', ok: 'Обліковий запис: пристрій вільний' }[worst];
+    var h = '<section class="account ' + worst + '"><h2>' + esc(head) + '<small>iCloud · Знайти · блокування · шифрування · MDM</small></h2>';
+    items.forEach(function (i) {
+      h += '<div class="arow ' + esc(i.status) + '"><div><span class="tag ' + esc(i.status) + '">' + esc(TAG[i.status] || i.status) +
+        '</span></div><div class="tt">' + esc(i.test) + '</div><div class="v">' + esc(i.value) + '</div></div>';
+    });
+    return h + '</section>';
+  }
   function block(st) {
-    var items = allItems().filter(function (i) { return i.status === st; });
+    var items = allItems().filter(function (i) { return i.status === st && i.cat !== TOP_CAT; });
     var h = '<details class="block ' + st + '"' + (st === 'ok' && items.length > 12 ? '' : ' open') + '><summary><span class="dot"></span>' +
       TITLES[st] + '<span class="n">' + items.length + '</span></summary>';
     if (!items.length) h += '<div class="empty">Немає</div>';
@@ -661,11 +691,12 @@ function Test-CtrlC {
 # Код, який виконується всередині кожного окремого тесту (окремий процес)
 $Helpers = {
     $ErrorActionPreference = 'Stop'
-    function R([string]$Status, [string]$Cat, [string]$Test, $Value) {
+    # Names must not clash with built-in aliases (e.g. `r` = Invoke-History).
+    function BbRes([string]$Status, [string]$Cat, [string]$Test, $Value) {
         [pscustomobject]@{ T = 'R'; Status = $Status; Cat = $Cat; Test = $Test; Value = "$Value".Trim() }
     }
-    function S([string]$Key, $Value) { [pscustomobject]@{ T = 'S'; Key = $Key; Value = "$Value".Trim() } }
-    function M([string]$Key, $Value) { [pscustomobject]@{ T = 'M'; Key = $Key; Value = "$Value".Trim() } }
+    function BbSpec([string]$Key, $Value) { [pscustomobject]@{ T = 'S'; Key = $Key; Value = "$Value".Trim() } }
+    function BbMeta([string]$Key, $Value) { [pscustomobject]@{ T = 'M'; Key = $Key; Value = "$Value".Trim() } }
     function GB($b) { [math]::Round([double]$b / 1GB, 1) }
     function Txt($a) { -join ($a | Where-Object { $_ -ne 0 } | ForEach-Object { [char]$_ }) }
     function BadSerial($s) { "$s".Trim() -match '^(|0+|none|n/?a|default.*|to be filled.*|system serial.*|chassis serial.*|123456789|xxxxx+)$' }
@@ -748,56 +779,56 @@ $T_System = {
         $model = "$($cs.Manufacturer) $($cs.Model)".Trim()
         $ver = "$($csp.Version)".Trim()
         if ($ver -and $ver -notmatch 'none|default|to be filled|system version' -and $model -notlike "*$ver*") { $model += " ($ver)" }
-        M 'hostname' $env:COMPUTERNAME; M 'model' $model; M 'serial' $serial; M 'os' "$($os.Caption)"
-        S 'Назва ПК' $env:COMPUTERNAME
-        S 'Модель' $model
-        S 'Серійний номер' $(if ($serial) { $serial } else { 'не вказано виробником' })
+        BbMeta 'hostname' $env:COMPUTERNAME; BbMeta 'model' $model; BbMeta 'serial' $serial; BbMeta 'os' "$($os.Caption)"
+        BbSpec 'Назва ПК' $env:COMPUTERNAME
+        BbSpec 'Модель' $model
+        BbSpec 'Серійний номер' $(if ($serial) { $serial } else { 'не вказано виробником' })
         $bd = ''; if ($bios.ReleaseDate) { $bd = ' від ' + $bios.ReleaseDate.ToString('dd.MM.yyyy') }
-        S 'BIOS / UEFI' "$($bios.Manufacturer) $($bios.SMBIOSBIOSVersion)$bd"
+        BbSpec 'BIOS / UEFI' "$($bios.Manufacturer) $($bios.SMBIOSBIOSVersion)$bd"
         $build = ''
         try { $cv = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'; $build = " $($cv.DisplayVersion), збірка $($cv.CurrentBuild).$($cv.UBR)" } catch {}
-        S 'Операційна система' "$($os.Caption)$build, $($os.OSArchitecture)"
-        S 'Встановлено ОС' $os.InstallDate.ToString('dd.MM.yyyy')
-        if ($serial) { R 'ok' 'Система' 'Серійний номер' $serial }
-        else { R 'warn' 'Система' 'Серійний номер' 'виробник не прописав серійний номер у BIOS' }
-    } catch { R 'skip' 'Система' 'Відомості про систему' "не вдалося прочитати: $($_.Exception.Message)" }
+        BbSpec 'Операційна система' "$($os.Caption)$build, $($os.OSArchitecture)"
+        BbSpec 'Встановлено ОС' $os.InstallDate.ToString('dd.MM.yyyy')
+        if ($serial) { BbRes 'ok' 'Система' 'Серійний номер' $serial }
+        else { BbRes 'warn' 'Система' 'Серійний номер' 'виробник не прописав серійний номер у BIOS' }
+    } catch { BbRes 'skip' 'Система' 'Відомості про систему' "не вдалося прочитати: $($_.Exception.Message)" }
 
     try {
         $lic = Get-CimInstance SoftwareLicensingProduct -Filter "PartialProductKey IS NOT NULL AND ApplicationID='55c92734-d682-4d71-983e-d6ec3f16059f'" | Select-Object -First 1
-        if ($lic -and $lic.LicenseStatus -eq 1) { R 'ok' 'Система' 'Активація Windows' 'активовано' }
-        else { R 'warn' 'Система' 'Активація Windows' 'Windows не активовано' }
-    } catch { R 'skip' 'Система' 'Активація Windows' 'не вдалося перевірити' }
+        if ($lic -and $lic.LicenseStatus -eq 1) { BbRes 'ok' 'Система' 'Активація Windows' 'активовано' }
+        else { BbRes 'warn' 'Система' 'Активація Windows' 'Windows не активовано' }
+    } catch { BbRes 'skip' 'Система' 'Активація Windows' 'не вдалося перевірити' }
 
     try {
-        if (Confirm-SecureBootUEFI) { R 'ok' 'Система' 'Secure Boot' 'увімкнено' }
-        else { R 'warn' 'Система' 'Secure Boot' 'вимкнено в налаштуваннях BIOS/UEFI' }
-    } catch { R 'warn' 'Система' 'Secure Boot' 'не підтримується — ПК працює в режимі Legacy BIOS' }
+        if (Confirm-SecureBootUEFI) { BbRes 'ok' 'Система' 'Secure Boot' 'увімкнено' }
+        else { BbRes 'warn' 'Система' 'Secure Boot' 'вимкнено в налаштуваннях BIOS/UEFI' }
+    } catch { BbRes 'warn' 'Система' 'Secure Boot' 'не підтримується — ПК працює в режимі Legacy BIOS' }
 
     try {
         $tpm = Get-Tpm
         $tv = ''
         try { $tv = (Get-CimInstance -Namespace root\cimv2\security\microsofttpm -ClassName Win32_Tpm).SpecVersion.Split(',')[0].Trim() } catch {}
-        if ($tpm.TpmPresent -and $tpm.TpmReady) { R 'ok' 'Система' 'TPM' $(if ($tv) { "версія $tv, готовий" } else { 'готовий' }) }
-        elseif ($tpm.TpmPresent) { R 'warn' 'Система' 'TPM' 'є, але не готовий до роботи' }
-        else { R 'warn' 'Система' 'TPM' 'відсутній або вимкнений у BIOS' }
-    } catch { R 'skip' 'Система' 'TPM' 'не вдалося перевірити' }
+        if ($tpm.TpmPresent -and $tpm.TpmReady) { BbRes 'ok' 'Система' 'TPM' $(if ($tv) { "версія $tv, готовий" } else { 'готовий' }) }
+        elseif ($tpm.TpmPresent) { BbRes 'warn' 'Система' 'TPM' 'є, але не готовий до роботи' }
+        else { BbRes 'warn' 'Система' 'TPM' 'відсутній або вимкнений у BIOS' }
+    } catch { BbRes 'skip' 'Система' 'TPM' 'не вдалося перевірити' }
 
     try {
         $bl = Get-BitLockerVolume -MountPoint $env:SystemDrive
-        S 'BitLocker (системний диск)' "$($bl.ProtectionStatus), $($bl.VolumeStatus)"
-    } catch { S 'BitLocker (системний диск)' 'недоступно в цій редакції Windows' }
+        BbSpec 'BitLocker (системний диск)' "$($bl.ProtectionStatus), $($bl.VolumeStatus)"
+    } catch { BbSpec 'BitLocker (системний диск)' 'недоступно в цій редакції Windows' }
 }
 
 $T_Hardware = {
     try {
         $cpu = @(Get-CimInstance Win32_Processor)[0]
         $name = ($cpu.Name -replace '\s+', ' ').Trim()
-        S 'Процесор' $name
-        S 'Ядра / потоки' "$($cpu.NumberOfCores) / $($cpu.NumberOfLogicalProcessors)"
-        S 'Базова частота' "$($cpu.MaxClockSpeed) МГц"
-        if ($cpu.ConfigManagerErrorCode -and $cpu.ConfigManagerErrorCode -ne 0) { R 'fail' 'Процесор' 'Процесор' "$name — помилка пристрою $($cpu.ConfigManagerErrorCode)" }
-        else { R 'ok' 'Процесор' 'Процесор' $name }
-    } catch { R 'skip' 'Процесор' 'Процесор' 'не вдалося прочитати' }
+        BbSpec 'Процесор' $name
+        BbSpec 'Ядра / потоки' "$($cpu.NumberOfCores) / $($cpu.NumberOfLogicalProcessors)"
+        BbSpec 'Базова частота' "$($cpu.MaxClockSpeed) МГц"
+        if ($cpu.ConfigManagerErrorCode -and $cpu.ConfigManagerErrorCode -ne 0) { BbRes 'fail' 'Процесор' 'Процесор' "$name — помилка пристрою $($cpu.ConfigManagerErrorCode)" }
+        else { BbRes 'ok' 'Процесор' 'Процесор' $name }
+    } catch { BbRes 'skip' 'Процесор' 'Процесор' 'не вдалося прочитати' }
 
     try {
         $mods = @(Get-CimInstance Win32_PhysicalMemory)
@@ -813,22 +844,22 @@ $T_Hardware = {
         }
         $sl = ''; if ($slots) { $sl = ", зайнято слотів: $($mods.Count) з $slots" }
         S "Оперативна пам'ять" "$(GB $total) ГБ$sl"
-        if ($total -gt 0) { R 'ok' "Пам'ять" "Оперативна пам'ять" "$(GB $total) ГБ$sl" }
-        else { R 'skip' "Пам'ять" "Оперативна пам'ять" 'не вдалося визначити' }
-    } catch { R 'skip' "Пам'ять" "Оперативна пам'ять" 'не вдалося прочитати' }
+        if ($total -gt 0) { BbRes 'ok' "Пам'ять" "Оперативна пам'ять" "$(GB $total) ГБ$sl" }
+        else { BbRes 'skip' "Пам'ять" "Оперативна пам'ять" 'не вдалося визначити' }
+    } catch { BbRes 'skip' "Пам'ять" "Оперативна пам'ять" 'не вдалося прочитати' }
 
     try {
         $gpus = @(Get-CimInstance Win32_VideoController)
-        if (-not $gpus.Count) { R 'fail' 'Відео' 'Відеоадаптер' 'не знайдено' }
+        if (-not $gpus.Count) { BbRes 'fail' 'Відео' 'Відеоадаптер' 'не знайдено' }
         foreach ($g in $gpus) {
             $res = ''
             if ($g.CurrentHorizontalResolution) { $res = ", $($g.CurrentHorizontalResolution)×$($g.CurrentVerticalResolution) $($g.CurrentRefreshRate) Гц" }
-            S 'Відеоадаптер' "$($g.Name), драйвер $($g.DriverVersion)"
-            if ($g.ConfigManagerErrorCode -ne 0) { R 'fail' 'Відео' 'Відеоадаптер' "$($g.Name) — помилка пристрою (код $($g.ConfigManagerErrorCode))" }
-            elseif ($g.Name -match 'Basic Display|Базов') { R 'warn' 'Відео' 'Відеоадаптер' "$($g.Name) — не встановлено драйвер відеокарти" }
-            else { R 'ok' 'Відео' 'Відеоадаптер' "$($g.Name)$res" }
+            BbSpec 'Відеоадаптер' "$($g.Name), драйвер $($g.DriverVersion)"
+            if ($g.ConfigManagerErrorCode -ne 0) { BbRes 'fail' 'Відео' 'Відеоадаптер' "$($g.Name) — помилка пристрою (код $($g.ConfigManagerErrorCode))" }
+            elseif ($g.Name -match 'Basic Display|Базов') { BbRes 'warn' 'Відео' 'Відеоадаптер' "$($g.Name) — не встановлено драйвер відеокарти" }
+            else { BbRes 'ok' 'Відео' 'Відеоадаптер' "$($g.Name)$res" }
         }
-    } catch { R 'skip' 'Відео' 'Відеоадаптер' 'не вдалося прочитати' }
+    } catch { BbRes 'skip' 'Відео' 'Відеоадаптер' 'не вдалося прочитати' }
 
     try {
         $ids = @(Get-CimInstance -Namespace root\wmi WmiMonitorID)
@@ -845,52 +876,52 @@ $T_Hardware = {
             }
             $isInt = $c -and ($c.VideoOutputTechnology -eq 11 -or $c.VideoOutputTechnology -eq 6 -or $c.VideoOutputTechnology -eq -2147483648)
             if ($isInt) { $internal = $true }
-            S $(if ($isInt) { 'Вбудований дисплей' } else { 'Дисплей' }) ($nm.Trim() + $size)
+            BbSpec $(if ($isInt) { 'Вбудований дисплей' } else { 'Дисплей' }) ($nm.Trim() + $size)
         }
-        if ($internal) { R 'ok' 'Відео' 'Вбудований дисплей' 'визначається системою' }
-        elseif ($ids.Count) { R 'ok' 'Відео' 'Дисплей' "визначено дисплеїв: $($ids.Count)" }
-        else { R 'warn' 'Відео' 'Вбудований дисплей' 'система не бачить дисплей' }
-    } catch { R 'skip' 'Відео' 'Дисплей' 'не вдалося прочитати' }
+        if ($internal) { BbRes 'ok' 'Відео' 'Вбудований дисплей' 'визначається системою' }
+        elseif ($ids.Count) { BbRes 'ok' 'Відео' 'Дисплей' "визначено дисплеїв: $($ids.Count)" }
+        else { BbRes 'warn' 'Відео' 'Вбудований дисплей' 'система не бачить дисплей' }
+    } catch { BbRes 'skip' 'Відео' 'Дисплей' 'не вдалося прочитати' }
 }
 
 $T_Disks = {
     $disks = @()
-    try { $disks = @(Get-PhysicalDisk) } catch { R 'skip' 'Диск' 'Накопичувачі' "не вдалося прочитати: $($_.Exception.Message)"; return }
-    if (-not $disks.Count) { R 'fail' 'Диск' 'Накопичувачі' 'не знайдено жодного диска' }
+    try { $disks = @(Get-PhysicalDisk) } catch { BbRes 'skip' 'Диск' 'Накопичувачі' "не вдалося прочитати: $($_.Exception.Message)"; return }
+    if (-not $disks.Count) { BbRes 'fail' 'Диск' 'Накопичувачі' 'не знайдено жодного диска' }
     foreach ($d in $disks) {
         $name = "$($d.FriendlyName)".Trim()
         $hs = "$($d.HealthStatus)"
         S "Диск: $name" "$($d.MediaType), $($d.BusType), $(GB $d.Size) ГБ"
-        if ($hs -in 'Healthy', '0') { R 'ok' 'Диск' "$name — стан" 'справний (Healthy)' }
-        elseif ($hs -in 'Warning', '1') { R 'warn' 'Диск' "$name — стан" 'Windows попереджає про проблеми (Warning)' }
-        else { R 'fail' 'Диск' "$name — стан" "несправний ($hs)" }
+        if ($hs -in 'Healthy', '0') { BbRes 'ok' 'Диск' "$name — стан" 'справний (Healthy)' }
+        elseif ($hs -in 'Warning', '1') { BbRes 'warn' 'Диск' "$name — стан" 'Windows попереджає про проблеми (Warning)' }
+        else { BbRes 'fail' 'Диск' "$name — стан" "несправний ($hs)" }
         try {
             $rc = $d | Get-StorageReliabilityCounter
             if ($null -ne $rc.Wear) {
                 $st = 'ok'; if ($rc.Wear -ge 90) { $st = 'fail' } elseif ($rc.Wear -ge 70) { $st = 'warn' }
-                R $st 'Диск' "$name — знос" "використано $($rc.Wear)% ресурсу"
+                BbRes $st 'Диск' "$name — знос" "використано $($rc.Wear)% ресурсу"
             }
             if ($rc.Temperature) {
                 $st = 'ok'; if ($rc.Temperature -ge 75) { $st = 'warn' }
-                R $st 'Диск' "$name — температура" "$($rc.Temperature) °C"
+                BbRes $st 'Диск' "$name — температура" "$($rc.Temperature) °C"
             }
             if ($rc.PowerOnHours) { S "Диск: $name — напрацювання" "$($rc.PowerOnHours) год" }
             $errs = [int64]$rc.ReadErrorsUncorrected + [int64]$rc.WriteErrorsUncorrected
-            if ($errs -gt 0) { R 'fail' 'Диск' "$name — помилки" "невиправлених помилок читання/запису: $errs" }
-            elseif ($null -ne $rc.ReadErrorsUncorrected) { R 'ok' 'Диск' "$name — помилки" 'невиправлених помилок немає' }
-        } catch { R 'skip' 'Диск' "$name — SMART" 'диск не віддає детальні дані SMART' }
+            if ($errs -gt 0) { BbRes 'fail' 'Диск' "$name — помилки" "невиправлених помилок читання/запису: $errs" }
+            elseif ($null -ne $rc.ReadErrorsUncorrected) { BbRes 'ok' 'Диск' "$name — помилки" 'невиправлених помилок немає' }
+        } catch { BbRes 'skip' 'Диск' "$name — SMART" 'диск не віддає детальні дані SMART' }
     }
     try {
         $v = Get-Volume -DriveLetter $env:SystemDrive[0]
         $pct = [math]::Round($v.SizeRemaining / $v.Size * 100)
         $st = 'ok'; if ($pct -lt 10) { $st = 'warn' }
-        R $st 'Диск' "Вільне місце на $env:SystemDrive" "$(GB $v.SizeRemaining) з $(GB $v.Size) ГБ ($pct%)"
+        BbRes $st 'Диск' "Вільне місце на $env:SystemDrive" "$(GB $v.SizeRemaining) з $(GB $v.Size) ГБ ($pct%)"
     } catch {}
 }
 
 $T_Battery = {
     $bat = @(Get-CimInstance Win32_Battery)
-    if (-not $bat.Count) { R 'fail' 'Батарея' 'Батарея' 'не знайдена (відсутня, від''єднана або несправна)'; return }
+    if (-not $bat.Count) { BbRes 'fail' 'Батарея' 'Батарея' 'не знайдена (відсутня, від''єднана або несправна)'; return }
     try {
         $xmlPath = Join-Path $env:TEMP "bibibi_battery_$PID.xml"
         & powercfg.exe /batteryreport /xml /output "$xmlPath" 2>&1 | Out-Null
@@ -904,23 +935,23 @@ $T_Battery = {
             if ($design -gt 0 -and $full -gt 0) {
                 $h = [math]::Round($full / $design * 100)
                 $st = 'ok'; if ($h -lt 50) { $st = 'fail' } elseif ($h -lt 75) { $st = 'warn' }
-                R $st 'Батарея' "Стан батареї$n" ("$h% від заводської ємності ({0:N1} з {1:N1} Вт·год)" -f ($full / 1000), ($design / 1000))
-            } elseif ($design -gt 0) { R 'fail' 'Батарея' "Стан батареї$n" 'повна ємність 0 — батарея не тримає заряд' }
-            else { R 'skip' 'Батарея' "Стан батареї$n" 'батарея не повідомляє ємність' }
+                BbRes $st 'Батарея' "Стан батареї$n" ("$h% від заводської ємності ({0:N1} з {1:N1} Вт·год)" -f ($full / 1000), ($design / 1000))
+            } elseif ($design -gt 0) { BbRes 'fail' 'Батарея' "Стан батареї$n" 'повна ємність 0 — батарея не тримає заряд' }
+            else { BbRes 'skip' 'Батарея' "Стан батареї$n" 'батарея не повідомляє ємність' }
             if ($b.CycleCount -and [int]$b.CycleCount -gt 0) {
                 $st = 'ok'; if ([int]$b.CycleCount -gt 800) { $st = 'warn' }
-                R $st 'Батарея' "Цикли заряду$n" $b.CycleCount
+                BbRes $st 'Батарея' "Цикли заряду$n" $b.CycleCount
             }
         }
-    } catch { R 'skip' 'Батарея' 'Стан батареї' 'не вдалося отримати звіт про батарею' }
-    S 'Поточний заряд' "$($bat[0].EstimatedChargeRemaining)%"
+    } catch { BbRes 'skip' 'Батарея' 'Стан батареї' 'не вдалося отримати звіт про батарею' }
+    BbSpec 'Поточний заряд' "$($bat[0].EstimatedChargeRemaining)%"
     try {
         $bs = Get-CimInstance -Namespace root\wmi BatteryStatus | Select-Object -First 1
         if ($bs.PowerOnline) {
             $chg = ''; if ($bs.Charging) { $chg = ', батарея заряджається' }
-            R 'ok' 'Батарея' 'Зарядний пристрій' "підключено$chg"
-        } else { R 'warn' 'Батарея' 'Зарядний пристрій' 'не підключено — перевірте зарядку вручну' }
-    } catch { R 'skip' 'Батарея' 'Зарядний пристрій' 'не вдалося перевірити' }
+            BbRes 'ok' 'Батарея' 'Зарядний пристрій' "підключено$chg"
+        } else { BbRes 'warn' 'Батарея' 'Зарядний пристрій' 'не підключено — перевірте зарядку вручну' }
+    } catch { BbRes 'skip' 'Батарея' 'Зарядний пристрій' 'не вдалося перевірити' }
 }
 
 $T_Network = {
@@ -930,25 +961,25 @@ $T_Network = {
         $eth = @($ad | Where-Object { "$($_.PhysicalMediaType)" -eq '802.3' -and $_.InterfaceDescription -notmatch 'Wi-?Fi|Wireless|WLAN' })
         if ($wifi.Count) {
             foreach ($w in $wifi) {
-                S 'Wi-Fi' "$($w.InterfaceDescription), MAC $($w.MacAddress)"
-                if ("$($w.Status)" -eq 'Disabled') { R 'warn' 'Мережа' 'Wi-Fi' "$($w.InterfaceDescription) — вимкнено" }
-                elseif ("$($w.Status)" -eq 'Not Present') { R 'fail' 'Мережа' 'Wi-Fi' "$($w.InterfaceDescription) — не відповідає" }
-                else { R 'ok' 'Мережа' 'Wi-Fi' "$($w.InterfaceDescription) — $($w.Status)" }
+                BbSpec 'Wi-Fi' "$($w.InterfaceDescription), MAC $($w.MacAddress)"
+                if ("$($w.Status)" -eq 'Disabled') { BbRes 'warn' 'Мережа' 'Wi-Fi' "$($w.InterfaceDescription) — вимкнено" }
+                elseif ("$($w.Status)" -eq 'Not Present') { BbRes 'fail' 'Мережа' 'Wi-Fi' "$($w.InterfaceDescription) — не відповідає" }
+                else { BbRes 'ok' 'Мережа' 'Wi-Fi' "$($w.InterfaceDescription) — $($w.Status)" }
             }
-        } else { R 'fail' 'Мережа' 'Wi-Fi' 'адаптер Wi-Fi не знайдено' }
+        } else { BbRes 'fail' 'Мережа' 'Wi-Fi' 'адаптер Wi-Fi не знайдено' }
         if ($eth.Count) {
-            foreach ($e in $eth) { S 'Ethernet' "$($e.InterfaceDescription), MAC $($e.MacAddress)"; R 'ok' 'Мережа' 'Ethernet' "$($e.InterfaceDescription) — $($e.Status)" }
-        } else { S 'Ethernet' 'немає вбудованого порту' }
-    } catch { R 'skip' 'Мережа' 'Мережеві адаптери' 'не вдалося прочитати' }
+            foreach ($e in $eth) { BbSpec 'Ethernet' "$($e.InterfaceDescription), MAC $($e.MacAddress)"; BbRes 'ok' 'Мережа' 'Ethernet' "$($e.InterfaceDescription) — $($e.Status)" }
+        } else { BbSpec 'Ethernet' 'немає вбудованого порту' }
+    } catch { BbRes 'skip' 'Мережа' 'Мережеві адаптери' 'не вдалося прочитати' }
     try {
         $bt = @(Get-PnpDevice -Class Bluetooth -PresentOnly -ErrorAction SilentlyContinue |
             Where-Object { $_.FriendlyName -notmatch 'Enumerator|RFCOMM|LE Generic|Identification|AVRCP|Перечислитель|перелічувач' })
         if ($bt.Count) {
             $bad = @($bt | Where-Object { "$($_.Status)" -ne 'OK' })
-            if ($bad.Count) { R 'warn' 'Мережа' 'Bluetooth' "$($bad[0].FriendlyName) — $($bad[0].Status)" }
-            else { R 'ok' 'Мережа' 'Bluetooth' $bt[0].FriendlyName }
-        } else { R 'warn' 'Мережа' 'Bluetooth' 'адаптер не знайдено або вимкнено' }
-    } catch { R 'skip' 'Мережа' 'Bluetooth' 'не вдалося перевірити' }
+            if ($bad.Count) { BbRes 'warn' 'Мережа' 'Bluetooth' "$($bad[0].FriendlyName) — $($bad[0].Status)" }
+            else { BbRes 'ok' 'Мережа' 'Bluetooth' $bt[0].FriendlyName }
+        } else { BbRes 'warn' 'Мережа' 'Bluetooth' 'адаптер не знайдено або вимкнено' }
+    } catch { BbRes 'skip' 'Мережа' 'Bluetooth' 'не вдалося перевірити' }
 }
 
 $T_Periph = {
@@ -958,39 +989,39 @@ $T_Periph = {
         $cam = @($cam)
         if ($cam.Count) {
             foreach ($c in $cam) {
-                if ("$($c.Status)" -eq 'OK') { R 'ok' 'Периферія' 'Вебкамера' $c.FriendlyName }
-                else { R 'fail' 'Периферія' 'Вебкамера' "$($c.FriendlyName) — $($c.Status)" }
+                if ("$($c.Status)" -eq 'OK') { BbRes 'ok' 'Периферія' 'Вебкамера' $c.FriendlyName }
+                else { BbRes 'fail' 'Периферія' 'Вебкамера' "$($c.FriendlyName) — $($c.Status)" }
             }
-        } else { R 'warn' 'Периферія' 'Вебкамера' 'не знайдена (вимкнена клавішею/шторкою, у BIOS або несправна)' }
-    } catch { R 'skip' 'Периферія' 'Вебкамера' 'не вдалося перевірити' }
+        } else { BbRes 'warn' 'Периферія' 'Вебкамера' 'не знайдена (вимкнена клавішею/шторкою, у BIOS або несправна)' }
+    } catch { BbRes 'skip' 'Периферія' 'Вебкамера' 'не вдалося перевірити' }
     try {
         $ep = Dev 'AudioEndpoint'
         $out = @($ep | Where-Object { $_.FriendlyName -match 'Speaker|Динамік|Динамики|Headphone|Навушник|Наушник' })
         $in = @($ep | Where-Object { $_.FriendlyName -match 'Microphone|Мікрофон|Микрофон|Mic' })
         $snd = @(Get-CimInstance Win32_SoundDevice)
-        foreach ($s in $snd) { S 'Аудіоконтролер' $s.Name }
-        if ($out.Count) { R 'ok' 'Периферія' 'Динаміки (пристрій)' (($out | ForEach-Object FriendlyName) -join '; ') }
-        elseif ($snd.Count) { R 'warn' 'Периферія' 'Динаміки (пристрій)' 'аудіоконтролер є, але вихід звуку не знайдено' }
-        else { R 'fail' 'Периферія' 'Динаміки (пристрій)' 'звукову карту не знайдено' }
-        if ($in.Count) { R 'ok' 'Периферія' 'Мікрофон' (($in | ForEach-Object FriendlyName) -join '; ') }
-        else { R 'warn' 'Периферія' 'Мікрофон' 'мікрофон не знайдено' }
-    } catch { R 'skip' 'Периферія' 'Звук' 'не вдалося перевірити' }
+        foreach ($s in $snd) { BbSpec 'Аудіоконтролер' $s.Name }
+        if ($out.Count) { BbRes 'ok' 'Периферія' 'Динаміки (пристрій)' (($out | ForEach-Object FriendlyName) -join '; ') }
+        elseif ($snd.Count) { BbRes 'warn' 'Периферія' 'Динаміки (пристрій)' 'аудіоконтролер є, але вихід звуку не знайдено' }
+        else { BbRes 'fail' 'Периферія' 'Динаміки (пристрій)' 'звукову карту не знайдено' }
+        if ($in.Count) { BbRes 'ok' 'Периферія' 'Мікрофон' (($in | ForEach-Object FriendlyName) -join '; ') }
+        else { BbRes 'warn' 'Периферія' 'Мікрофон' 'мікрофон не знайдено' }
+    } catch { BbRes 'skip' 'Периферія' 'Звук' 'не вдалося перевірити' }
     try {
         $kb = @(Dev 'Keyboard'); $ms = @(Dev 'Mouse')
-        if ($kb.Count) { S 'Клавіатура' (($kb | ForEach-Object FriendlyName | Select-Object -Unique) -join '; ') }
+        if ($kb.Count) { BbSpec 'Клавіатура' (($kb | ForEach-Object FriendlyName | Select-Object -Unique) -join '; ') }
         $tp = @($ms | Where-Object { $_.FriendlyName -match 'touch ?pad|precision|synaptics|elan|alps|сенсорн' })
         if (-not $tp.Count) { $tp = @(Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue | Where-Object { $_.FriendlyName -match 'touch ?pad|precision touchpad|сенсорна панель' }) }
-        if ($tp.Count) { R 'ok' 'Периферія' 'Тачпад (пристрій)' $tp[0].FriendlyName }
-        else { R 'warn' 'Периферія' 'Тачпад (пристрій)' 'тачпад не визначено як окремий пристрій — перевірте в ручному тесті' }
+        if ($tp.Count) { BbRes 'ok' 'Периферія' 'Тачпад (пристрій)' $tp[0].FriendlyName }
+        else { BbRes 'warn' 'Периферія' 'Тачпад (пристрій)' 'тачпад не визначено як окремий пристрій — перевірте в ручному тесті' }
     } catch {}
     try {
-        $fp = @(Dev 'Biometric'); if ($fp.Count) { S 'Сканер відбитків' $fp[0].FriendlyName }
+        $fp = @(Dev 'Biometric'); if ($fp.Count) { BbSpec 'Сканер відбитків' $fp[0].FriendlyName }
         $usb = @(Get-CimInstance Win32_USBController)
         $badUsb = @($usb | Where-Object { $_.ConfigManagerErrorCode -ne 0 })
-        if ($badUsb.Count) { R 'fail' 'Периферія' 'USB-контролери' "$($badUsb[0].Name) — помилка $($badUsb[0].ConfigManagerErrorCode)" }
-        elseif ($usb.Count) { R 'ok' 'Периферія' 'USB-контролери' "працюють ($($usb.Count))" }
+        if ($badUsb.Count) { BbRes 'fail' 'Периферія' 'USB-контролери' "$($badUsb[0].Name) — помилка $($badUsb[0].ConfigManagerErrorCode)" }
+        elseif ($usb.Count) { BbRes 'ok' 'Периферія' 'USB-контролери' "працюють ($($usb.Count))" }
         $cr = @(Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue | Where-Object { $_.FriendlyName -match 'Card Reader|SD Host|кардрідер' })
-        if ($cr.Count) { S 'Кардрідер' $cr[0].FriendlyName }
+        if ($cr.Count) { BbSpec 'Кардрідер' $cr[0].FriendlyName }
     } catch {}
 }
 
@@ -998,17 +1029,17 @@ $T_Drivers = {
     try {
         # 22 = вимкнено вручну, 45 = пристрій зараз не підключено — це не помилки
         $bad = @(Get-CimInstance Win32_PnPEntity | Where-Object { $_.ConfigManagerErrorCode -and $_.ConfigManagerErrorCode -notin 0, 22, 45 })
-        if (-not $bad.Count) { R 'ok' 'Драйвери' 'Диспетчер пристроїв' 'усі пристрої працюють без помилок'; return }
+        if (-not $bad.Count) { BbRes 'ok' 'Драйвери' 'Диспетчер пристроїв' 'усі пристрої працюють без помилок'; return }
         foreach ($d in ($bad | Select-Object -First 20)) {
             $n = $d.Name; if (-not $n) { $n = $d.PNPDeviceID }
             $why = "помилка пристрою, код $($d.ConfigManagerErrorCode)"
             if ($d.ConfigManagerErrorCode -eq 28) { $why = 'не встановлено драйвер' }
             if ($d.ConfigManagerErrorCode -eq 10) { $why = 'пристрій не запускається (код 10)' }
             if ($d.ConfigManagerErrorCode -eq 43) { $why = 'пристрій повідомив про збій (код 43)' }
-            R 'warn' 'Драйвери' $n $why
+            BbRes 'warn' 'Драйвери' $n $why
         }
-        if ($bad.Count -gt 20) { R 'warn' 'Драйвери' 'Ще пристрої з помилками' "$($bad.Count - 20) шт." }
-    } catch { R 'skip' 'Драйвери' 'Диспетчер пристроїв' 'не вдалося перевірити' }
+        if ($bad.Count -gt 20) { BbRes 'warn' 'Драйвери' 'Ще пристрої з помилками' "$($bad.Count - 20) шт." }
+    } catch { BbRes 'skip' 'Драйвери' 'Диспетчер пристроїв' 'не вдалося перевірити' }
 }
 
 $T_Logs = {
@@ -1017,26 +1048,26 @@ $T_Logs = {
     try {
         $n = Cnt @{ LogName = 'System'; ProviderName = 'Microsoft-Windows-Kernel-Power'; Id = 41; StartTime = $since }
         $st = 'ok'; if ($n -ge 5) { $st = 'warn' }
-        R $st 'Журнал Windows' 'Неочікувані вимкнення (30 днів)' $(if ($n) { "$n разів (зависання, збій живлення або вимкнення кнопкою)" } else { 'не було' })
-    } catch { R 'skip' 'Журнал Windows' 'Неочікувані вимкнення' 'не вдалося прочитати журнал' }
+        BbRes $st 'Журнал Windows' 'Неочікувані вимкнення (30 днів)' $(if ($n) { "$n разів (зависання, збій живлення або вимкнення кнопкою)" } else { 'не було' })
+    } catch { BbRes 'skip' 'Журнал Windows' 'Неочікувані вимкнення' 'не вдалося прочитати журнал' }
     try {
         $n = Cnt @{ LogName = 'System'; ProviderName = 'Microsoft-Windows-WER-SystemErrorReporting'; Id = 1001; StartTime = $since }
         $st = 'ok'; if ($n -ge 3) { $st = 'fail' } elseif ($n -ge 1) { $st = 'warn' }
-        R $st 'Журнал Windows' 'Сині екрани (BSOD, 30 днів)' $(if ($n) { "$n разів" } else { 'не було' })
+        BbRes $st 'Журнал Windows' 'Сині екрани (BSOD, 30 днів)' $(if ($n) { "$n разів" } else { 'не було' })
     } catch {}
     try {
         $ev = @(Get-WinEvent -FilterHashtable @{ LogName = 'System'; ProviderName = 'Microsoft-Windows-WHEA-Logger'; StartTime = $since } -ErrorAction SilentlyContinue)
         $fatal = @($ev | Where-Object { $_.Level -le 2 }).Count
         $corr = $ev.Count - $fatal
-        if ($fatal) { R 'fail' 'Журнал Windows' 'Апаратні помилки WHEA (30 днів)' "критичних: $fatal, виправлених: $corr" }
-        elseif ($corr -ge 10) { R 'warn' 'Журнал Windows' 'Апаратні помилки WHEA (30 днів)' "виправлених апаратних помилок: $corr" }
-        else { R 'ok' 'Журнал Windows' 'Апаратні помилки WHEA (30 днів)' $(if ($corr) { "поодинокі виправлені: $corr" } else { 'не було' }) }
+        if ($fatal) { BbRes 'fail' 'Журнал Windows' 'Апаратні помилки WHEA (30 днів)' "критичних: $fatal, виправлених: $corr" }
+        elseif ($corr -ge 10) { BbRes 'warn' 'Журнал Windows' 'Апаратні помилки WHEA (30 днів)' "виправлених апаратних помилок: $corr" }
+        else { BbRes 'ok' 'Журнал Windows' 'Апаратні помилки WHEA (30 днів)' $(if ($corr) { "поодинокі виправлені: $corr" } else { 'не було' }) }
     } catch {}
     try {
         $n = @(Get-WinEvent -FilterHashtable @{ LogName = 'System'; ProviderName = 'disk', 'Ntfs', 'stornvme', 'storahci', 'iaStorAC', 'iaStorA'; Level = 1, 2, 3; StartTime = $since } -ErrorAction SilentlyContinue |
             Where-Object { $_.Id -in 7, 11, 15, 51, 129, 153, 55, 98, 140 }).Count
         $st = 'ok'; if ($n -ge 10) { $st = 'fail' } elseif ($n -ge 1) { $st = 'warn' }
-        R $st 'Журнал Windows' 'Помилки диска (30 днів)' $(if ($n) { "$n записів про збої читання/запису або файлової системи" } else { 'не було' })
+        BbRes $st 'Журнал Windows' 'Помилки диска (30 днів)' $(if ($n) { "$n записів про збої читання/запису або файлової системи" } else { 'не було' })
     } catch {}
 }
 
@@ -1088,7 +1119,7 @@ public static class BibibiDisk {
         $letter = $env:SystemDrive[0]
         $vol = Get-Volume -DriveLetter $letter
         $need = ($SizeMB + 2048) * 1MB
-        if ($vol.SizeRemaining -lt $need) { R 'skip' 'Диск' 'Швидкість диска' "замало вільного місця для тесту (потрібно $([math]::Round($need / 1GB, 1)) ГБ)"; return }
+        if ($vol.SizeRemaining -lt $need) { BbRes 'skip' 'Диск' 'Швидкість диска' "замало вільного місця для тесту (потрібно $([math]::Round($need / 1GB, 1)) ГБ)"; return }
         $media = ''; $bus = ''
         try {
             $dn = (Get-Partition -DriveLetter $letter | Select-Object -First 1).DiskNumber
@@ -1104,9 +1135,9 @@ public static class BibibiDisk {
         foreach ($x in @(@('Швидкість запису', $w, $lw), @('Швидкість читання', $rd, $lr))) {
             $st = 'ok'; if ($x[1] -lt 15) { $st = 'fail' } elseif ($x[1] -lt $x[2]) { $st = 'warn' }
             $note = ''; if ($st -ne 'ok') { $note = " (для $kind очікується від $($x[2]) МБ/с)" }
-            R $st 'Диск' $x[0] "$($x[1]) МБ/с$note"
+            BbRes $st 'Диск' $x[0] "$($x[1]) МБ/с$note"
         }
-    } catch { R 'skip' 'Диск' 'Швидкість диска' "не вдалося виміряти: $($_.Exception.Message)" }
+    } catch { BbRes 'skip' 'Диск' 'Швидкість диска' "не вдалося виміряти: $($_.Exception.Message)" }
     finally { Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue }
 }
 
@@ -1120,15 +1151,16 @@ function Run-Stress {
     $onAC = $true
     try { $bs = Get-CimInstance -Namespace root\wmi BatteryStatus | Select-Object -First 1; if ($bs) { $onAC = [bool]$bs.PowerOnline } } catch {}
     $samples = New-Object System.Collections.Generic.List[object]
-    $pool = $null; $workers = @(); $state = 'done'
+    $pool = $null; $workers = @(); $state = 'done'; $ran = 0
     $sw = [Diagnostics.Stopwatch]::StartNew()
     try {
         $pool = [runspacefactory]::CreateRunspacePool(1, $n); $pool.Open()
-        $work = { param($sec) $end = [DateTime]::UtcNow.AddSeconds($sec); $x = 0.0
-            while ([DateTime]::UtcNow -lt $end) { for ($i = 1; $i -lt 50000; $i++) { $x += [math]::Sqrt($i) * [math]::Sin($i) } } }
+        $endAt = [DateTime]::UtcNow.AddSeconds($CpuSeconds)
+        $work = { param($end) $x = 0.0
+            while ([DateTime]::UtcNow -lt $end) { for ($i = 1; $i -lt 20000; $i++) { $x += [math]::Sqrt($i) * [math]::Sin($i) } } }
         for ($i = 0; $i -lt $n; $i++) {
             $ps = [powershell]::Create(); $ps.RunspacePool = $pool
-            [void]$ps.AddScript($work).AddArgument($CpuSeconds + 10)
+            [void]$ps.AddScript($work).AddArgument($endAt)
             $workers += [pscustomobject]@{ P = $ps; H = $ps.BeginInvoke() }
         }
         $sw.Restart(); $next = 0
@@ -1152,15 +1184,22 @@ function Run-Stress {
             }
             Start-Sleep -Milliseconds 250
         }
+        $ran = [int]$sw.Elapsed.TotalSeconds
         Write-Host ''
     } catch {
         Write-Host ''
         Add-R 'skip' 'Навантаження' 'Стрес-тест' "помилка: $($_.Exception.Message)"; $state = 'error'
     } finally {
-        foreach ($w in $workers) { try { $w.P.Stop() } catch {}; try { $w.P.Dispose() } catch {} }
-        if ($pool) { try { $pool.Close(); $pool.Dispose() } catch {} }
+        if (-not $ran) { $ran = [int]$sw.Elapsed.TotalSeconds }
+        # Skipped early: make the workers finish now instead of waiting for them.
+        foreach ($w in $workers) { try { [void]$w.P.BeginStop($null, $null) } catch {} }
+        $deadline = (Get-Date).AddSeconds(15)
+        foreach ($w in $workers) {
+            while (-not $w.H.IsCompleted -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 100 }
+            if ($w.H.IsCompleted) { try { $w.P.Dispose() } catch {} }
+        }
+        if ($pool) { try { $pool.Close() } catch {} }
     }
-    $ran = [int]$sw.Elapsed.TotalSeconds
     if ($state -eq 'skipped') { Add-R 'skip' 'Навантаження' 'Тест пропущено' "пропущено вручну (Ctrl+C) через $ran с" }
     $v = @($samples | Where-Object { $_.T -ge 10 })
     if ($v.Count -lt 4) { if ($state -eq 'done') { Add-R 'skip' 'Навантаження' 'Стрес-тест' 'не вдалося зняти показники процесора' }; return }
@@ -1170,7 +1209,7 @@ function Run-Stress {
     $p3 = ($v | Select-Object -Last $third | Measure-Object Perf -Average).Average
     $mhz = ($v | Select-Object -First 1).MHz
     $acNote = ''; if (-not $onAC) { $acNote = ' Тест ішов від батареї — результат може бути занижений.' }
-    if ($avgLoad -ge 80) { Add-R 'ok' 'Навантаження' 'Завантаження процесора' "середнє $avgLoad% на $n потоках протягом $ran с" }
+    if ($avgLoad -ge 70) { Add-R 'ok' 'Навантаження' 'Завантаження процесора' "середнє $avgLoad% на $n потоках протягом $ran с" }
     else { Add-R 'warn' 'Навантаження' 'Завантаження процесора' "лише $avgLoad% — процесор не вийшов на повне навантаження (енергозбереження?).$acNote" }
     if ($p1 -gt 0 -and $mhz -gt 0) {
         $f1 = [math]::Round($mhz * $p1 / 100); $f3 = [math]::Round($mhz * $p3 / 100)
@@ -1194,19 +1233,28 @@ function Run-Stress {
 function Safe-Name([string]$s) { ($s -replace '[\\/:*?"<>|\[\]]', '_' -replace '\s+', ' ').Trim(' .') }
 
 function Build-Html([string]$FileName) {
-    $data = [ordered]@{
-        version = $BibibiVersion
-        final   = $false
-        meta    = [ordered]@{
-            hostname = $Meta.hostname; model = $Meta.model; serial = $Meta.serial; os = $Meta.os
-            platform = 'windows'; date = (Get-Date -Format 'yyyy-MM-dd'); datetime = (Get-Date -Format 'dd.MM.yyyy HH:mm')
-            duration = "$([math]::Round(((Get-Date) - $Started).TotalMinutes))"; filename = $FileName; user = $UF.User
-        }
-        results = @($Results)
-        specs   = @($Specs)
-        manual  = @{}
-    }
-    $json = ($data | ConvertTo-Json -Depth 6 -Compress).Replace('</', '<\/')
+    # Built step by step on purpose: Windows PowerShell 5.1 throws
+    # "Argument types do not match" on a nested [ordered] literal here.
+    $minutes = [int][math]::Round(((Get-Date) - $Started).TotalMinutes)
+    $m = New-Object System.Collections.Specialized.OrderedDictionary
+    $m['hostname'] = [string]$Meta.hostname
+    $m['model']    = [string]$Meta.model
+    $m['serial']   = [string]$Meta.serial
+    $m['os']       = [string]$Meta.os
+    $m['platform'] = 'windows'
+    $m['date']     = (Get-Date -Format 'yyyy-MM-dd')
+    $m['datetime'] = (Get-Date -Format 'dd.MM.yyyy HH:mm')
+    $m['duration'] = [string]$minutes
+    $m['filename'] = $FileName
+    $m['user']     = [string]$UF.User
+    $data = New-Object System.Collections.Specialized.OrderedDictionary
+    $data['version'] = $BibibiVersion
+    $data['final']   = $false
+    $data['meta']    = $m
+    $data['results'] = [object[]]$Results.ToArray()
+    $data['specs']   = [object[]]$Specs.ToArray()
+    $data['manual']  = New-Object System.Collections.Hashtable
+    $json = (ConvertTo-Json -InputObject $data -Depth 6 -Compress).Replace('</', '<\/')
     return $Template.Replace('__BIBIBI_DATA__', $json)
 }
 
@@ -1243,6 +1291,8 @@ try {
     Write-Host ''
     Write-Host '>> Звіт' -ForegroundColor Cyan
     $sn = Safe-Name $Meta.serial; if (-not $sn) { $sn = 'невідомо' }
+    if (-not (Safe-Name $Meta.hostname)) { $Meta.hostname = [Environment]::MachineName }
+    if (-not (Safe-Name $Meta.hostname)) { $Meta.hostname = 'PC' }
     $base = "$(Safe-Name $Meta.hostname) - SN $sn - $(Get-Date -Format 'yyyy-MM-dd')"
     $desk = $UF.Desktop
     if (Test-Path -LiteralPath (Join-Path $desk "$base.html")) { $base += " $(Get-Date -Format 'HH-mm')" }
